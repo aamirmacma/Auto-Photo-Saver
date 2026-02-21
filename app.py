@@ -154,8 +154,11 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                 if not sur_name: sur_name = "Name"
                 if not ppt_num: ppt_num = "NoPassport"
                 
-                clean_name = f"{given_name}_{sur_name}".replace("Unknown_", "").strip("_")
-                clean_name = re.sub(r'[^A-Za-z0-9_]', '', clean_name)
+                # 3. Clean Name for File (AB SPACES ALLOW HAIN)
+                clean_name = f"{given_name} {sur_name}".replace("Unknown", "").strip()
+                clean_name = re.sub(r'\s+', ' ', clean_name) # Faltu spaces ko ek space mein badle
+                clean_name = re.sub(r'[^A-Za-z0-9 ]', '', clean_name) # Space allow karein, baqi special characters hatayen
+                
                 if not clean_name: clean_name = "Saved_Photo"
                     
                 file_name = f"{clean_name}_{ppt_num}.jpg"
@@ -184,8 +187,9 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                     st.markdown("---")
                     st.write("📝 **Copy Data for Amadeus (Click icon on right):**")
                     
-                    # Copy-able blocks
-                    st.code(f"{sur_name} {given_name}", language="text")
+                    # Copy-able blocks (Ab Given Name pehle aayega aur spaces ke sath)
+                    full_name_for_copy = f"{given_name} {sur_name}".strip()
+                    st.code(full_name_for_copy, language="text")
                     st.code(f"{ppt_num}", language="text")
                     
                     st.markdown("---")
