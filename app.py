@@ -18,9 +18,9 @@ except:
 st.set_page_config(page_title="Auto Photo Saver", page_icon="📸", layout="centered")
 
 st.title("📸 Auto Photo & Passport Saver")
-st.markdown("Passport scan karein, system naam nikal kar photo ko required size (5-12KB) mein save karega.")
+st.markdown("Passport scan karein, system naam nikal kar photo ko enhance karega aur (5-12KB) mein save karega.")
 
-# --- HELPER: IMAGE PREPROCESSING FOR BETTER OCR ---
+# --- HELPER: PASSPORT OCR PREPROCESSING ---
 def preprocess_image_for_ocr(image):
     gray_image = ImageOps.grayscale(image)
     enhancer = ImageEnhance.Contrast(gray_image)
@@ -81,12 +81,35 @@ def parse_passport_mrz(text):
                 
     return details
 
+# --- NEW HELPER: AUTO-ENHANCE PERSON'S PHOTO ---
+def auto_enhance_face_photo(img):
+    # 1. Color Balance (Thoda natural aur bright color)
+    color_enhancer = ImageEnhance.Color(img)
+    img = color_enhancer.enhance(1.1)
+    
+    # 2. Brightness (Halki si roshni barhana)
+    brightness_enhancer = ImageEnhance.Brightness(img)
+    img = brightness_enhancer.enhance(1.05)
+    
+    # 3. Contrast (Features ko wazeh karna)
+    contrast_enhancer = ImageEnhance.Contrast(img)
+    img = contrast_enhancer.enhance(1.1)
+    
+    # 4. Sharpness (Blurry pictures ko clear karna)
+    sharpness_enhancer = ImageEnhance.Sharpness(img)
+    img = sharpness_enhancer.enhance(1.5) # 1.5x sharper
+    
+    return img
+
 # --- HELPER: PROCESS PHOTO SIZE & FORMAT ---
 def format_photo_for_requirements(uploaded_photo):
     img = Image.open(uploaded_photo)
     
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
+        
+    # Yahan Auto-Enhance function call ho raha hai!
+    img = auto_enhance_face_photo(img)
         
     img = img.resize((120, 150), Image.Resampling.LANCZOS)
     
@@ -154,17 +177,17 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                 if not sur_name: sur_name = "Name"
                 if not ppt_num: ppt_num = "NoPassport"
                 
-                # 3. Clean Name for File (AB SPACES ALLOW HAIN)
+                # 3. Clean Name for File
                 clean_name = f"{given_name} {sur_name}".replace("Unknown", "").strip()
-                clean_name = re.sub(r'\s+', ' ', clean_name) # Faltu spaces ko ek space mein badle
-                clean_name = re.sub(r'[^A-Za-z0-9 ]', '', clean_name) # Space allow karein, baqi special characters hatayen
+                clean_name = re.sub(r'\s+', ' ', clean_name)
+                clean_name = re.sub(r'[^A-Za-z0-9 ]', '', clean_name)
                 
                 if not clean_name: clean_name = "Saved_Photo"
                     
                 file_name = f"{clean_name}_{ppt_num}.jpg"
                 save_path = os.path.join(SAVE_DIR, file_name)
                 
-                # 2. Process Photo
+                # 2. Process & ENHANCE Photo
                 final_photo_bytes = format_photo_for_requirements(person_photo)
                 file_size_kb = len(final_photo_bytes) / 1024
                 
@@ -177,7 +200,7 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                 # 4. Display Results with Copy Feature
                 res1, res2 = st.columns([1, 2])
                 with res1:
-                    st.image(final_photo_bytes, caption=f"Size: {file_size_kb:.1f} KB\nDim: 120x150 px", width=150)
+                    st.image(final_photo_bytes, caption=f"Size: {file_size_kb:.1f} KB\nDim: 120x150 px\n✨ Enhanced", width=150)
                 with res2:
                     st.write("📋 **Extracted Details:**")
                     st.write(f"- **Given Name:** {given_name}") 
@@ -185,16 +208,15 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                     st.write(f"- **Passport No:** {ppt_num}")
                     
                     st.markdown("---")
-                    st.write("📝 **Copy Data for Amadeus (Click icon on right):**")
+                    st.write("📝 **Copy Data for Amadeus:**")
                     
-                    # Copy-able blocks (Ab Given Name pehle aayega aur spaces ke sath)
                     full_name_for_copy = f"{given_name} {sur_name}".strip()
                     st.code(full_name_for_copy, language="text")
                     st.code(f"{ppt_num}", language="text")
                     
                     st.markdown("---")
                     st.download_button(
-                        label=f"⬇️ Download Format Ready Photo",
+                        label=f"⬇️ Download Enhanced Photo",
                         data=final_photo_bytes,
                         file_name=file_name,
                         mime="image/jpeg",
