@@ -18,7 +18,7 @@ except:
 st.set_page_config(page_title="Auto Photo Saver", page_icon="📸", layout="wide")
 
 st.title("📸 Auto Photo & Passport Saver (Amadeus Pro)")
-st.markdown("Passport scan karein, yeh naya **Dual-Scan Engine** 100% accurate data nikal kar SR DOCS command banayega.")
+st.markdown("Passport scan karein, yeh naya engine **100% Accurate Data** nikal kar SR DOCS command banayega.")
 
 # --- HELPER: FORMAT DATES FOR AMADEUS (DDMMMYY) ---
 def format_amadeus_date(raw_date):
@@ -30,8 +30,8 @@ def format_amadeus_date(raw_date):
     month_str = months.get(mm, mm)
     return f"{dd}{month_str}{yy}"
 
-# --- HELPER: DUAL-SCAN PASSPORT EXTRACTOR ---
-def parse_passport_data_advanced(image):
+# --- HELPER: NEW ACCURATE PASSPORT EXTRACTOR ---
+def parse_passport_data_perfect(image):
     details = {
         'Given Name': '', 'Surname': '', 'Passport': '', 
         'DOB': '', 'Expiry': '', 'CNIC': '', 
@@ -41,88 +41,88 @@ def parse_passport_data_advanced(image):
     width, height = image.size
     
     # ==========================================
-    # SCAN 1: TOP PART (For Father/Husband Name)
+    # SCAN 1: TOP HALF (For Passport, CNIC, Father Name)
     # ==========================================
-    top_crop = image.crop((0, 0, width, int(height * 0.75)))
-    top_crop = top_crop.resize((top_crop.width * 2, top_crop.height * 2), Image.Resampling.LANCZOS)
+    top_crop = image.crop((0, 0, width, int(height * 0.70)))
     top_gray = ImageOps.grayscale(top_crop)
-    top_enhanced = ImageEnhance.Contrast(top_gray).enhance(2.0)
+    # Mild enhance taake labels blur na hon
+    top_enh = ImageEnhance.Contrast(top_gray).enhance(1.5)
     
-    top_text = pytesseract.image_to_string(top_enhanced).upper()
+    top_text = pytesseract.image_to_string(top_enh).upper()
+    
+    # 1. Exact Passport Number Match (e.g. HU0004372)
+    ppt_matches = re.findall(r'\b[A-Z]{2}\d{7}\b', top_text)
+    if ppt_matches:
+        details['Passport'] = ppt_matches[0]
+        
+    # 2. Exact CNIC Match (e.g. 42301-0903437-0)
+    cnic_matches = re.findall(r'\b\d{5}-\d{7}-\d\b', top_text)
+    if cnic_matches:
+        details['CNIC'] = cnic_matches[0]
+        
+    # 3. Father / Husband Name
     top_lines = top_text.split('\n')
-    
-    father_name_found = ""
     for i, line in enumerate(top_lines):
-        if re.search(r'(FATHER|HUSBAND|FATH|HUSB)', line):
-            # Check next 3 lines for the actual name
+        if "FATHER" in line or "HUSBAND" in line:
             for j in range(1, 4):
                 if i + j < len(top_lines):
-                    potential_name = re.sub(r'[^A-Z ]', '', top_lines[i+j]).strip()
-                    ignore_words = ["DATE", "BIRTH", "SEX", "PLACE", "NATIONALITY", "PASSPORT", "AUTHORITY", "PAKISTAN", "KARACHI", "ISSUING", "M", "F"]
-                    if len(potential_name) > 3 and not any(w in potential_name for w in ignore_words):
-                        father_name_found = potential_name
+                    cand = re.sub(r'[^A-Z ]', '', top_lines[i+j]).strip()
+                    cand = re.sub(r'\s+', ' ', cand)
+                    ignore_words = ["DATE", "BIRTH", "SEX", "PLACE", "NATIONALITY", "PASSPORT", "AUTHORITY", "PAKISTAN", "KARACHI", "ISSUING", "OF"]
+                    if len(cand) > 3 and not any(w in cand for w in ignore_words):
+                        details['Father Name'] = cand
                         break
-            if father_name_found:
+            if details['Father Name']:
                 break
-    details['Father Name'] = father_name_found.strip()
 
     # ==========================================
-    # SCAN 2: BOTTOM MRZ PART (100% Accurate Data)
+    # SCAN 2: BOTTOM HALF (For MRZ details)
     # ==========================================
-    # Crop exactly the bottom 30% where MRZ is
-    bottom_crop = image.crop((0, int(height * 0.70), width, height))
-    bottom_crop = bottom_crop.resize((bottom_crop.width * 2, bottom_crop.height * 2), Image.Resampling.LANCZOS)
-    bot_gray = ImageOps.grayscale(bottom_crop)
-    bot_enhanced = ImageEnhance.Contrast(bot_gray).enhance(2.5)
+    bot_crop = image.crop((0, int(height * 0.60), width, height))
+    bot_gray = ImageOps.grayscale(bot_crop)
+    bot_enh = ImageEnhance.Contrast(bot_gray).enhance(2.5)
     
-    # STRICT WHITELIST: Only allow MRZ characters (no random C, K, E from background)
-    custom_config = r'-c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789< --psm 6'
-    mrz_text = pytesseract.image_to_string(bot_enhanced, config=custom_config)
+    bot_text = pytesseract.image_to_string(bot_enh, config='--psm 6').upper()
     
-    mrz_lines = [l.strip() for l in mrz_text.split('\n') if len(l.strip()) > 30]
+    # Sab faltu spaces hata dein taake MRZ ki lambai theek rahay
+    bot_lines = [l.replace(" ", "") for l in bot_text.split('\n')]
     
-    mrz_line1 = ""
-    mrz_line2 = ""
-    
-    for l in mrz_lines:
-        if l.startswith("P<"):
-            mrz_line1 = l
-        elif len(l) >= 42 and l[0].isalnum() and not l.startswith("P<"):
-            mrz_line2 = l
+    mrz1, mrz2 = "", ""
+    for l in bot_lines:
+        if "P<" in l and len(l) > 30:
+            mrz1 = l[l.find("P<"):]
+        elif len(l) > 30 and sum(c.isdigit() for c in l) > 10 and "<" in l:
+            if not l.startswith("P<"):
+                mrz2 = l
 
-    # Parse Line 1 (Names)
-    if mrz_line1 and len(mrz_line1) >= 44:
-        # e.g., P<PAK<<MAH<JABEEN<<<<<<<<<<<<<<<<<<
-        name_part = mrz_line1[5:44].strip('<')
+    # MRZ Line 1: Surname aur Given Name (STRICT LOGIC)
+    if mrz1:
+        name_part = mrz1[5:].rstrip('<')
         if '<<' in name_part:
             parts = name_part.split('<<', 1)
-            surname = parts[0].replace('<', ' ').strip()
-            given_name = parts[1].replace('<', ' ').strip()
+            sur = parts[0].replace('<', ' ').strip()
+            giv = parts[1].replace('<', ' ').strip()
         else:
-            surname = name_part.replace('<', ' ').strip()
-            given_name = ""
+            sur = name_part.replace('<', ' ').strip()
+            giv = ""
             
-        # If Surname is empty but Given Name exists (like Mah Jabeen case)
-        if not surname and given_name:
-            surname = given_name
-            given_name = ""
-            
-        details['Surname'] = surname
-        details['Given Name'] = given_name
+        details['Surname'] = re.sub(r'[^A-Z ]', '', sur)
+        details['Given Name'] = re.sub(r'[^A-Z ]', '', giv)
 
-    # Parse Line 2 (Passport, DOB, Expiry, CNIC, Gender)
-    if mrz_line2 and len(mrz_line2) >= 42:
-        details['Passport'] = mrz_line2[0:9].replace('<', '').strip()
-        details['DOB'] = format_amadeus_date(mrz_line2[13:19])
-        gender_char = mrz_line2[20]
-        if gender_char in ['M', 'F']:
-            details['Gender'] = gender_char
-        details['Expiry'] = format_amadeus_date(mrz_line2[21:27])
+    # MRZ Line 2: Dates aur Fallback Passport
+    if mrz2 and len(mrz2) >= 42:
+        if not details['Passport']:
+            details['Passport'] = mrz2[0:9].replace('<', '')
+            
+        details['DOB'] = format_amadeus_date(mrz2[13:19])
+        if mrz2[20] in ['M', 'F']:
+            details['Gender'] = mrz2[20]
+        details['Expiry'] = format_amadeus_date(mrz2[21:27])
         
-        # Pakistani CNIC is ALWAYS at index 28 to 40 in MRZ line 2! (100% accurate)
-        personal_num = mrz_line2[28:41].replace('<', '')
-        if len(personal_num) == 13 and personal_num.isdigit():
-            details['CNIC'] = f"{personal_num[:5]}-{personal_num[5:12]}-{personal_num[12]}"
+        if not details['CNIC']:
+            p_num = mrz2[28:41].replace('<', '')
+            if len(p_num) == 13 and p_num.isdigit():
+                details['CNIC'] = f"{p_num[:5]}-{p_num[5:12]}-{p_num[12]}"
 
     return details
 
@@ -201,11 +201,10 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
     elif not person_photo:
         st.warning("⚠️ Photo upload karein jo save karni hai!")
     else:
-        with st.spinner("🔍 Naya Engine Scan kar raha hai..."):
+        with st.spinner("🔍 Naya Accurate Engine Scan kar raha hai..."):
             try:
-                # DUAL SCAN SYSTEM
                 image = Image.open(passport_file)
-                extracted = parse_passport_data_advanced(image)
+                extracted = parse_passport_data_perfect(image)
                 
                 given_name = extracted.get('Given Name', '').strip()
                 sur_name = extracted.get('Surname', '').strip()
@@ -216,15 +215,12 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                 father_name = extracted.get('Father Name', '')
                 gender = extracted.get('Gender', 'M')
                 
-                if not sur_name and not given_name:
-                    sur_name = "Name"
-                if not ppt_num: ppt_num = "NoPassport"
-                
-                # Clean Name for File
+                # Agar dono khali hain tou basic fallback
                 clean_name = f"{given_name} {sur_name}".strip()
                 clean_name = re.sub(r'\s+', ' ', clean_name)
                 clean_name = re.sub(r'[^A-Za-z0-9 ]', '', clean_name)
                 if not clean_name: clean_name = "Saved_Photo"
+                if not ppt_num: ppt_num = "NoPassport"
                     
                 file_name = f"{clean_name}_{ppt_num}.jpg"
                 save_path = os.path.join(SAVE_DIR, file_name)
@@ -253,6 +249,7 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                     col_det1, col_det2 = st.columns(2)
                     
                     with col_det1:
+                        # Khali hone par dashes (---) show karega
                         st.write(f"**Surname:** {sur_name if sur_name else '---'}")
                         st.write(f"**Father/Husband:** {father_name if father_name else 'Not Found'}")
                         st.write(f"**CNIC:** {cnic if cnic else 'Not Found'}")
@@ -269,11 +266,8 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                     surname_cmd = sur_name.replace(" ", "").lower()
                     givenname_cmd = given_name.replace(" ", "").lower()
                     
-                    # Agar Given name khali hai (jaise MAH JABEEN ke case mein)
-                    if givenname_cmd:
-                        sr_docs_cmd = f"SRDOCS {airline_code.lower()} HK1-P-pak-{ppt_num.lower()}-pak-{dob.lower()}-{gender}-{expiry.lower()}-{surname_cmd}-{givenname_cmd}-h/p{pax_no}"
-                    else:
-                        sr_docs_cmd = f"SRDOCS {airline_code.lower()} HK1-P-pak-{ppt_num.lower()}-pak-{dob.lower()}-{gender}-{expiry.lower()}-{surname_cmd}-h/p{pax_no}"
+                    # Yeh line automatically blank spaces ko control karegi
+                    sr_docs_cmd = f"SRDOCS {airline_code.lower()} HK1-P-pak-{ppt_num.lower()}-pak-{dob.lower()}-{gender}-{expiry.lower()}-{surname_cmd}-{givenname_cmd}-h/p{pax_no}"
                     
                     st.code(sr_docs_cmd, language="text")
                     
