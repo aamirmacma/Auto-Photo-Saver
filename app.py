@@ -15,9 +15,9 @@ except:
     OCR_AVAILABLE = False
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Auto Photo Saver (Pro Batch)", page_icon="📸", layout="wide")
+st.set_page_config(page_title="Auto Photo Saver (Batch Pro)", page_icon="📸", layout="wide")
 
-st.title("📸 Auto Photo & Passport Saver (Pro Batch)")
+st.title("📸 Auto Photo & Passport Saver (Batch Pro)")
 st.markdown("Har passenger ka Passport aur Photo uske makhsoos box mein upload karein taake koi data mix na ho.")
 
 # --- HELPER: CLEAN NAME GARBAGE ---
@@ -25,7 +25,6 @@ def clean_name_garbage(text):
     text = re.sub(r'[^A-Z ]', '', text.upper())
     # 3 ya us se zyada K, S, C, X, E agar end mein aayen tou unko kaat do
     text = re.sub(r'([KCSXE]\s*){3,}.*$', '', text)
-    # Aakhir mein bacha hua akela stray letter (separated by space)
     text = re.sub(r'\s+[KCSXE]$', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
@@ -75,7 +74,6 @@ def parse_passport_data_perfect(image):
     # 2. BOTTOM HALF SCAN (Strict MRZ Parsing with Binarization)
     bot_crop = image.crop((0, int(height * 0.60), width, height))
     bot_gray = ImageOps.grayscale(bot_crop.resize((bot_crop.width * 2, bot_crop.height * 2), Image.Resampling.LANCZOS))
-    # Thresholding: Background watermarks ko completely white kar dega, sirf text black rahega
     bot_bw = bot_gray.point(lambda x: 0 if x < 130 else 255, '1')
     
     mrz_config = r'-c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789< --psm 6'
@@ -83,7 +81,6 @@ def parse_passport_data_perfect(image):
     
     clean_text = mrz_text.replace(" ", "") 
     
-    # Passport, DOB, Gender, Expiry (Exact Pattern Match)
     mrz2_pattern = r'([A-Z0-9<]{8,9})[0-9<][A-Z<]{3}(\d{6})[0-9<]([MF<])(\d{6})'
     mrz2_match = re.search(mrz2_pattern, clean_text)
     
@@ -94,12 +91,11 @@ def parse_passport_data_perfect(image):
         details['Gender'] = gender_char if gender_char in ['M', 'F'] else 'M'
         details['Expiry'] = format_mrz_date(mrz2_match.group(4))
         
-    # Names (MRZ Line 1)
     mrz1_pattern = r'P<PAK([A-Z<]+)'
     mrz1_match = re.search(mrz1_pattern, clean_text)
     if mrz1_match:
         name_str = mrz1_match.group(1)
-        name_str = re.sub(r'[KCSXZE<]+$', '', name_str) # Strip trailing garbage immediately
+        name_str = re.sub(r'[KCSXZE<]+$', '', name_str) 
         
         if name_str.startswith('<<'):
             details['Surname'] = ""
@@ -115,15 +111,9 @@ def parse_passport_data_perfect(image):
         details['Surname'] = clean_name_garbage(details['Surname'])
         details['Given Name'] = clean_name_garbage(details['Given Name'])
 
-    # Fallback Passport
-    if not details['Passport']:
-        ppt_matches = re.findall(r'\b([A-Z]{2}[0-9]{7})\b', top_text.replace('O', '0'))
-        if ppt_matches:
-            details['Passport'] = ppt_matches[0]
-
     return details
 
-# --- HELPER: AUTO-ENHANCE PERSON'S PHOTO ---
+# --- HELPER: AUTO-ENHANCE PHOTO ---
 def auto_enhance_face_photo(img):
     img = ImageEnhance.Color(img).enhance(1.1)
     img = ImageEnhance.Brightness(img).enhance(1.05)
@@ -131,34 +121,23 @@ def auto_enhance_face_photo(img):
     img = ImageEnhance.Sharpness(img).enhance(1.5) 
     return img
 
-# --- HELPER: PROCESS PHOTO SIZE & FORMAT ---
+# --- HELPER: PROCESS PHOTO SIZE ---
 def format_photo_for_requirements(uploaded_photo):
     img = Image.open(uploaded_photo)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
-        
     img = auto_enhance_face_photo(img)
     img = img.resize((120, 150), Image.Resampling.LANCZOS)
     
     quality = 95
-    min_size = 5 * 1024
-    max_size = 12 * 1024
-    
     output_bytes = io.BytesIO()
-    
     while quality > 5:
         output_bytes.seek(0)
         output_bytes.truncate(0)
         img.save(output_bytes, format='JPEG', quality=quality)
-        size = output_bytes.tell()
-        
-        if size <= max_size:
-            if size >= min_size:
-                break
-            else:
-                break
+        if 5 * 1024 <= output_bytes.tell() <= 12 * 1024:
+            break
         quality -= 5
-        
     return output_bytes.getvalue()
 
 # --- FOLDER BANANE KA LOGIC ---
@@ -166,110 +145,79 @@ SAVE_DIR = "Saved_Photos"
 if not os.path.exists(SAVE_DIR): 
     os.makedirs(SAVE_DIR)
 
-st.markdown("---")
-
 # --- UI SETTINGS ---
+st.markdown("---")
 setting_col1, setting_col2 = st.columns(2)
 with setting_col1:
-    airline_code = st.text_input("✈️ Airline Code (e.g. sv, pk, qr):", value="sv", max_chars=2)
+    airline_code = st.text_input("✈️ Airline Code (sv, pk, qr):", value="sv", max_chars=2)
 with setting_col2:
     num_pax = st.number_input("👥 Total Passengers to Process:", min_value=1, max_value=10, value=1)
 
 st.markdown("---")
 
-# --- DYNAMIC PASSENGER UPLOAD ROWS ---
+# --- MULTIPLE PASSENGER UPLOAD ROWS ---
 pax_data = []
 for i in range(num_pax):
     st.markdown(f"#### 👤 Passenger {i+1}")
     c1, c2 = st.columns(2)
     with c1:
-        ppt = st.file_uploader(f"Passport for Pax {i+1}", type=['jpg', 'png', 'jpeg'], key=f"ppt_{i}")
+        ppt = st.file_uploader(f"Upload Passport {i+1}", type=['jpg', 'png', 'jpeg'], key=f"ppt_{i}")
     with c2:
-        pic = st.file_uploader(f"Photo for Pax {i+1}", type=['jpg', 'png', 'jpeg'], key=f"pic_{i}")
+        pic = st.file_uploader(f"Upload Photo {i+1}", type=['jpg', 'png', 'jpeg'], key=f"pic_{i}")
     pax_data.append({'passport': ppt, 'photo': pic, 'pax_no': i+1})
     st.markdown("---")
 
 # --- PROCESS BUTTON ---
 if st.button("💾 PROCESS ALL PASSENGERS", type="primary", use_container_width=True):
     if not OCR_AVAILABLE:
-        st.error("⚠️ OCR Library Missing. Tesseract install hona zaroori hai.")
+        st.error("⚠️ OCR Library Missing.")
     else:
-        # Check if any data is missing
-        missing_data = any(p['passport'] is None or p['photo'] is None for p in pax_data)
-        if missing_data:
-            st.warning("⚠️ Barae meharbani tamam passengers ke Passport aur Photo upload karein!")
+        # Check if any passenger data is missing
+        if any(p['passport'] is None or p['photo'] is None for p in pax_data):
+            st.warning("⚠️ Sab passengers ke Passport aur Photo upload karein!")
         else:
-            with st.spinner("🔍 Tamam Passengers ka data scan ho raha hai..."):
+            with st.spinner("🔍 Scanning all passengers..."):
                 for p in pax_data:
-                    ppt_file = p['passport']
-                    pic_file = p['photo']
-                    current_pax_no = p['pax_no']
-                    
                     try:
-                        image = Image.open(ppt_file)
+                        image = Image.open(p['passport'])
                         extracted = parse_passport_data_perfect(image)
                         
-                        given_name = extracted.get('Given Name', '').strip()
-                        sur_name = extracted.get('Surname', '').strip()
-                        ppt_num = extracted.get('Passport', '').strip()
-                        dob = extracted.get('DOB', '')
-                        expiry = extracted.get('Expiry', '')
-                        cnic = extracted.get('CNIC', '')
-                        father_name = extracted.get('Father Name', '')
-                        gender = extracted.get('Gender', 'M')
+                        # Extract Details
+                        sur = extracted['Surname']
+                        giv = extracted['Given Name']
+                        ppt = extracted['Passport']
+                        dob = extracted['DOB']
+                        exp = extracted['Expiry']
+                        gen = extracted['Gender']
+                        cnic = extracted['CNIC']
+                        father = extracted['Father Name']
                         
-                        if not given_name and not sur_name:
-                            clean_name = f"Saved_Photo_{current_pax_no}"
-                        else:
-                            clean_name = f"{given_name} {sur_name}".strip()
-                            clean_name = re.sub(r'\s+', ' ', clean_name)
+                        # Save Photo
+                        photo_bytes = format_photo_for_requirements(p['photo'])
+                        file_name = f"{giv}_{sur}_{ppt}.jpg".strip("_")
+                        with open(os.path.join(SAVE_DIR, file_name), "wb") as f:
+                            f.write(photo_bytes)
                         
-                        if not ppt_num: ppt_num = "NoPassport"
-                            
-                        file_name = f"{clean_name}_{ppt_num}.jpg"
-                        save_path = os.path.join(SAVE_DIR, file_name)
-                        
-                        final_photo_bytes = format_photo_for_requirements(pic_file)
-                        file_size_kb = len(final_photo_bytes) / 1024
-                        
-                        with open(save_path, "wb") as f:
-                            f.write(final_photo_bytes)
-                            
-                        # Display Results
-                        with st.expander(f"✅ PNR Details: Passenger {current_pax_no} - {given_name} {sur_name}", expanded=True):
+                        # Display
+                        with st.expander(f"✅ Passenger {p['pax_no']}: {giv} {sur}", expanded=True):
                             res1, res2 = st.columns([1, 2.5])
                             with res1:
-                                st.image(final_photo_bytes, caption=f"Size: {file_size_kb:.1f} KB\nDim: 120x150 px", width=150)
-                                st.download_button(
-                                    label=f"⬇️ Download Photo",
-                                    data=final_photo_bytes,
-                                    file_name=file_name,
-                                    mime="image/jpeg",
-                                    key=f"dl_{current_pax_no}"
-                                )
+                                st.image(photo_bytes, width=150)
+                                st.download_button("Download Photo", data=photo_bytes, file_name=file_name, key=f"dl_{p['pax_no']}")
                             with res2:
-                                col_det1, col_det2 = st.columns(2)
-                                
-                                with col_det1:
-                                    st.write(f"**Surname:** {sur_name if sur_name else '---'}")
-                                    st.write(f"**Father/Husband:** {father_name if father_name else 'Not Found'}")
-                                    st.write(f"**CNIC:** {cnic if cnic else 'Not Found'}")
-                                    
-                                with col_det2:
-                                    st.write(f"**Given Name:** {given_name if given_name else '---'}")
-                                    st.write(f"**Passport No:** {ppt_num}")
-                                    st.write(f"**DOB:** {dob} | **Exp:** {expiry}")
-                                    st.write(f"**Gender:** {gender}")
+                                col_a, col_b = st.columns(2)
+                                with col_a:
+                                    st.write(f"**Surname:** {sur if sur else '---'}")
+                                    st.write(f"**Father:** {father}")
+                                    st.write(f"**CNIC:** {cnic}")
+                                with col_b:
+                                    st.write(f"**Given Name:** {giv if giv else '---'}")
+                                    st.write(f"**Passport:** {ppt}")
+                                    st.write(f"**DOB:** {dob} | **Exp:** {exp}")
+                                    st.write(f"**Gender:** {gen}")
                                 
                                 st.markdown("---")
-                                st.write("✈️ **Amadeus SR DOCS Command:**")
-                                
-                                surname_cmd = sur_name.replace(" ", "").lower()
-                                givenname_cmd = given_name.replace(" ", "").lower()
-                                
-                                sr_docs_cmd = f"SRDOCS {airline_code.lower()} HK1-P-pak-{ppt_num.lower()}-pak-{dob.lower()}-{gender}-{expiry.lower()}-{surname_cmd}-{givenname_cmd}-h/p{current_pax_no}"
-                                
+                                sr_docs_cmd = f"SRDOCS {airline_code.lower()} HK1-P-pak-{ppt.lower()}-pak-{dob.lower()}-{gen}-{exp.lower()}-{sur.lower()}-{giv.lower()}-h/p{p['pax_no']}"
                                 st.code(sr_docs_cmd, language="text")
-                                
                     except Exception as e:
-                        st.error(f"Error processing Passenger {current_pax_no}: {e}")
+                        st.error(f"Error in Passenger {p['pax_no']}: {e}")
