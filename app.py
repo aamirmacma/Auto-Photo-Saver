@@ -15,10 +15,10 @@ except:
     OCR_AVAILABLE = False
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Auto Photo Saver", page_icon="📸", layout="centered")
+st.set_page_config(page_title="Auto Photo Saver", page_icon="📸", layout="wide")
 
-st.title("📸 Auto Photo & Passport Saver")
-st.markdown("Passport scan karein, system Amadeus ke liye mukammal details nikal kar photo enhance karega.")
+st.title("📸 Auto Photo & Passport Saver (Amadeus Pro)")
+st.markdown("Passport scan karein, system CNIC, Father Name nikalega aur **Amadeus SR DOCS** command auto-generate karega.")
 
 # --- HELPER: PASSPORT OCR PREPROCESSING ---
 def preprocess_image_for_ocr(image):
@@ -47,74 +47,83 @@ def format_amadeus_date(raw_date):
     month_str = months.get(mm, mm)
     return f"{dd}{month_str}{yy}"
 
-# --- HELPER: SMARTER PASSPORT EXTRACTOR ---
-def parse_passport_mrz(text):
-    details = {'Given Name': '', 'Surname': '', 'Passport': '', 'DOB': '', 'Expiry': ''}
+# --- HELPER: FULL PASSPORT EXTRACTOR ---
+def parse_passport_data(text):
+    details = {
+        'Given Name': '', 'Surname': '', 'Passport': '', 
+        'DOB': '', 'Expiry': '', 'CNIC': '', 
+        'Father Name': '', 'Gender': 'M', 'Nationality': 'PAK'
+    }
     
+    # --- 1. Extract CNIC & Father/Husband Name from Original Text ---
+    original_lines = text.upper().split('\n')
+    
+    # Find CNIC (Pattern: 12345-1234567-1 or without dashes)
+    cnic_match = re.search(r'\b(\d{5})[-\s]?(\d{7})[-\s]?(\d)\b', text.upper())
+    if cnic_match:
+        details['CNIC'] = f"{cnic_match.group(1)}-{cnic_match.group(2)}-{cnic_match.group(3)}"
+        
+    # Find Father or Husband Name
+    for i, line in enumerate(original_lines):
+        if "FATHER" in line or "HUSBAND" in line:
+            # Check the next 1 or 2 lines for the actual name
+            for j in range(1, 3):
+                if i + j < len(original_lines):
+                    potential_name = re.sub(r'[^A-Z ]', '', original_lines[i+j]).strip()
+                    # Filter out other labels that might be caught
+                    if len(potential_name) > 3 and not any(x in potential_name for x in ["DATE", "SEX", "PLACE"]):
+                        details['Father Name'] = clean_garbage(potential_name)
+                        break
+            break
+
+    # --- 2. Extract Data from MRZ ---
     clean_text = text.replace(" ", "").upper()
     for char in ['«', '¢', '(', '[', '{', '£', '€']:
         clean_text = clean_text.replace(char, "<")
     
-    lines = clean_text.split('\n')
+    mrz_lines = clean_text.split('\n')
     mrz_line1 = ""
     mrz_line2 = ""
     
-    for i, line in enumerate(lines):
+    for i, line in enumerate(mrz_lines):
         if "P<" in line and len(line) > 20:
             mrz_line1 = line[line.find("P<"):] 
-            if i + 1 < len(lines):
-                mrz_line2 = lines[i+1]
+            if i + 1 < len(mrz_lines):
+                mrz_line2 = mrz_lines[i+1]
             break
             
-    # --- Line 1: Naam Nikalna ---
+    # Name from Line 1
     if mrz_line1:
         try:
+            details['Nationality'] = mrz_line1[2:5].replace('<', 'PAK') # Default PAK
             raw_name_data = mrz_line1[5:].strip('<')
             if '<<' in raw_name_data:
                 name_parts = raw_name_data.split('<<', 1)
                 surname = name_parts[0].replace('<', ' ').strip()
                 given_name = name_parts[1].replace('<', ' ').strip()
-                
                 details['Surname'] = clean_garbage(re.sub(r'[^A-Z ]', '', surname))
                 details['Given Name'] = clean_garbage(re.sub(r'[^A-Z ]', '', given_name))
-            else:
-                parts = raw_name_data.split('<')
-                valid_parts = []
-                for p in parts:
-                    cleaned_part = re.sub(r'[^A-Z]', '', p.strip())
-                    if not cleaned_part: continue
-                    if re.match(r'^[KC]{2,}$', cleaned_part):
-                        break
-                    valid_parts.append(cleaned_part)
-                
-                if valid_parts:
-                    details['Surname'] = clean_garbage(valid_parts[0])
-                    if len(valid_parts) > 1:
-                        details['Given Name'] = clean_garbage(" ".join(valid_parts[1:]))
-        except Exception as e:
+        except:
             pass
 
-    # --- Line 2: Passport No, DOB, Expiry Nikalna ---
-    if mrz_line2 and len(mrz_line2) >= 28: # MRZ ki length check ki hai
-        
-        # 1. Passport Number
+    # PPT, DOB, Expiry, Gender from Line 2
+    if mrz_line2 and len(mrz_line2) >= 28:
         potential_ppt = re.sub(r'[^A-Z0-9]', '', mrz_line2[:9])
         if len(potential_ppt) >= 7:
             details['Passport'] = potential_ppt
             
-        # 2. Date of Birth (Index 13 se 19 tak hoti hai)
-        dob_raw = mrz_line2[13:19]
-        details['DOB'] = format_amadeus_date(dob_raw)
+        details['DOB'] = format_amadeus_date(mrz_line2[13:19])
+        details['Expiry'] = format_amadeus_date(mrz_line2[21:27])
         
-        # 3. Expiry Date (Index 21 se 27 tak hoti hai)
-        exp_raw = mrz_line2[21:27]
-        details['Expiry'] = format_amadeus_date(exp_raw)
+        gender_char = mrz_line2[20]
+        if gender_char in ['M', 'F']:
+            details['Gender'] = gender_char
 
     # Fallback Passport
     if not details['Passport']:
         matches = re.findall(r'\b[A-Z0-9]{8,10}\b', clean_text)
         for m in matches:
-            if any(c.isdigit() for c in m) and "BEARY" not in m and "PAK" not in m:
+            if any(c.isdigit() for c in m) and "PAK" not in m:
                 details['Passport'] = m
                 break
                 
@@ -196,19 +205,23 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                 processed_image = preprocess_image_for_ocr(image)
                 
                 text = pytesseract.image_to_string(processed_image, config='--psm 6')
-                extracted = parse_passport_mrz(text)
+                extracted = parse_passport_data(text)
                 
                 given_name = extracted.get('Given Name', '').strip()
                 sur_name = extracted.get('Surname', '').strip()
                 ppt_num = extracted.get('Passport', '').strip()
                 dob = extracted.get('DOB', 'Unknown')
                 expiry = extracted.get('Expiry', 'Unknown')
+                cnic = extracted.get('CNIC', 'Not Found')
+                father_name = extracted.get('Father Name', 'Not Found')
+                gender = extracted.get('Gender', 'M')
+                nat = extracted.get('Nationality', 'PAK')
                 
                 if not given_name: given_name = "Unknown"
                 if not sur_name: sur_name = "Name"
                 if not ppt_num: ppt_num = "NoPassport"
                 
-                # 3. Clean Name for File
+                # Clean Name for File
                 clean_name = f"{given_name} {sur_name}".replace("Unknown", "").strip()
                 clean_name = re.sub(r'\s+', ' ', clean_name)
                 clean_name = re.sub(r'[^A-Za-z0-9 ]', '', clean_name)
@@ -228,44 +241,39 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                     
                 st.success(f"✅ Photo Successfully Saved as: **{file_name}**")
                 
-                # 4. Display Results with Copy Feature
-                res1, res2 = st.columns([1, 2])
+                # 4. Display Results with Full Amadeus Command
+                res1, res2 = st.columns([1, 2.5])
                 with res1:
                     st.image(final_photo_bytes, caption=f"Size: {file_size_kb:.1f} KB\nDim: 120x150 px\n✨ Enhanced", width=150)
-                with res2:
-                    st.write("📋 **Extracted Details:**")
-                    st.write(f"- **Given Name:** {given_name}") 
-                    st.write(f"- **Surname:** {sur_name}")
-                    st.write(f"- **Passport No:** {ppt_num}")
-                    st.write(f"- **DOB:** {dob}")
-                    st.write(f"- **Expiry Date:** {expiry}")
-                    
-                    st.markdown("---")
-                    st.write("📝 **Copy Data for Amadeus:**")
-                    
-                    full_name_for_copy = f"{given_name} {sur_name}".strip()
-                    st.code(full_name_for_copy, language="text")
-                    
-                    # Amadeus DOCS format mein Dates aur Passport alag copy blocks mein
-                    col_copy1, col_copy2, col_copy3 = st.columns(3)
-                    with col_copy1:
-                        st.write("Passport:")
-                        st.code(f"{ppt_num}", language="text")
-                    with col_copy2:
-                        st.write("DOB:")
-                        st.code(f"{dob}", language="text")
-                    with col_copy3:
-                        st.write("Expiry:")
-                        st.code(f"{expiry}", language="text")
-                    
-                    st.markdown("---")
                     st.download_button(
-                        label=f"⬇️ Download Enhanced Photo",
+                        label=f"⬇️ Download Photo",
                         data=final_photo_bytes,
                         file_name=file_name,
                         mime="image/jpeg",
-                        type="primary"
+                        type="primary",
+                        use_container_width=True
                     )
+                with res2:
+                    st.write("📋 **Extracted Details:**")
+                    col_det1, col_det2 = st.columns(2)
+                    with col_det1:
+                        st.write(f"**Name:** {given_name} {sur_name}")
+                        st.write(f"**Father/Husband:** {father_name}")
+                        st.write(f"**CNIC:** {cnic}")
+                    with col_det2:
+                        st.write(f"**Passport No:** {ppt_num}")
+                        st.write(f"**DOB:** {dob} | **Exp:** {expiry}")
+                        st.write(f"**Gender:** {gender}")
+                    
+                    st.markdown("---")
+                    st.write("✈️ **Amadeus SR DOCS Command (Click to Copy):**")
+                    
+                    # Generate SR DOCS Format
+                    # Format: SR DOCS YY HK1-P-PAK-{PPT}-PAK-{DOB}-{GENDER}-{EXPIRY}-{SURNAME}-{GIVENNAME}
+                    sr_docs_cmd = f"SR DOCS YY HK1-P-{nat}-{ppt_num}-{nat}-{dob}-{gender}-{expiry}-{sur_name}-{given_name}"
+                    
+                    st.code(sr_docs_cmd, language="text")
+                    st.caption("*Note: Aap 'YY' ki jagah apni specific airline ka code (e.g., PK, SV, QR) likh sakte hain.*")
                     
             except Exception as e:
                 st.error(f"Error: {e}")
