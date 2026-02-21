@@ -62,16 +62,14 @@ def parse_passport_data(text):
     if cnic_match:
         details['CNIC'] = f"{cnic_match.group(1)}-{cnic_match.group(2)}-{cnic_match.group(3)}"
         
-    # --- 2. Extract Father/Husband Name (FIXED LOGIC) ---
+    # --- 2. Extract Father/Husband Name ---
     father_name_found = ""
     for i, line in enumerate(original_lines):
-        # BUG FIX: Sirf Father ya Husband ka lafz dhoondein, "Name" ko hata diya taake mix na ho
         if re.search(r'(FATHER|HUSBAND|FATH|HUSB)', line.upper()):
             for j in range(1, 4):
                 if i + j < len(original_lines):
                     potential_name = re.sub(r'[^A-Z ]', '', original_lines[i+j]).strip()
                     ignore_words = ["DATE", "BIRTH", "SEX", "PLACE", "NATIONALITY", "PASSPORT", "AUTHORITY", "PAKISTAN", "REPUBLIC", "ISSUING", "KARACHI"]
-                    # Agar line mein naam mojood hai aur ignore words mein se nahi hai
                     if len(potential_name) > 3 and not any(w in potential_name for w in ignore_words):
                         father_name_found = clean_garbage(potential_name)
                         break
@@ -249,11 +247,15 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                 with res2:
                     st.write("📋 **Extracted Details:**")
                     col_det1, col_det2 = st.columns(2)
+                    
+                    # BUG FIX: Pehle Column mein Surname, Doosre mein Given Name
                     with col_det1:
-                        st.write(f"**Name:** {given_name} {sur_name}")
+                        st.write(f"**Surname:** {sur_name}")
                         st.write(f"**Father/Husband:** {father_name if father_name else 'Not Found (Manual Entry needed)'}")
                         st.write(f"**CNIC:** {cnic if cnic else 'Not Found'}")
+                        
                     with col_det2:
+                        st.write(f"**Given Name:** {given_name}")
                         st.write(f"**Passport No:** {ppt_num}")
                         st.write(f"**DOB:** {dob} | **Exp:** {expiry}")
                         st.write(f"**Gender:** {gender}")
@@ -261,7 +263,6 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                     st.markdown("---")
                     st.write("✈️ **Amadeus SR DOCS Command:**")
                     
-                    # BUG FIX: Yahan naam ke darmiyan spaces ab barkaraar rahenge
                     sr_docs_cmd = f"SRDOCS {airline_code.lower()} HK1-P-pak-{ppt_num.lower()}-pak-{dob.lower()}-{gender}-{expiry.lower()}-{sur_name.lower()}-{given_name.lower()}-h/p{pax_no}"
                     
                     st.code(sr_docs_cmd, language="text")
