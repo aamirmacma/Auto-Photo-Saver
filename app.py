@@ -62,17 +62,16 @@ def parse_passport_data(text):
     if cnic_match:
         details['CNIC'] = f"{cnic_match.group(1)}-{cnic_match.group(2)}-{cnic_match.group(3)}"
         
-    # --- 2. Extract Father/Husband Name (IMPROVED LOGIC) ---
+    # --- 2. Extract Father/Husband Name (FIXED LOGIC) ---
     father_name_found = ""
     for i, line in enumerate(original_lines):
-        # Look for variations of Father/Husband keywords
-        if any(word in line for word in ["FATHER", "HUSBAND", "FATH", "HUSB", "NAME"]):
-            # Check the next 3 lines to find a valid uppercase name
+        # BUG FIX: Sirf Father ya Husband ka lafz dhoondein, "Name" ko hata diya taake mix na ho
+        if re.search(r'(FATHER|HUSBAND|FATH|HUSB)', line.upper()):
             for j in range(1, 4):
                 if i + j < len(original_lines):
                     potential_name = re.sub(r'[^A-Z ]', '', original_lines[i+j]).strip()
-                    # Ignore common passport labels that might be picked up
-                    ignore_words = ["DATE", "BIRTH", "SEX", "PLACE", "NATIONALITY", "PASSPORT", "AUTHORITY", "PAKISTAN", "REPUBLIC", "ISSUING"]
+                    ignore_words = ["DATE", "BIRTH", "SEX", "PLACE", "NATIONALITY", "PASSPORT", "AUTHORITY", "PAKISTAN", "REPUBLIC", "ISSUING", "KARACHI"]
+                    # Agar line mein naam mojood hai aur ignore words mein se nahi hai
                     if len(potential_name) > 3 and not any(w in potential_name for w in ignore_words):
                         father_name_found = clean_garbage(potential_name)
                         break
@@ -97,7 +96,6 @@ def parse_passport_data(text):
                 mrz_line2 = mrz_lines[i+1]
             break
             
-    # Name from Line 1
     if mrz_line1:
         try:
             details['Nationality'] = mrz_line1[2:5].replace('<', 'PAK')
@@ -111,7 +109,6 @@ def parse_passport_data(text):
         except:
             pass
 
-    # PPT, DOB, Expiry, Gender from Line 2
     if mrz_line2 and len(mrz_line2) >= 28:
         potential_ppt = re.sub(r'[^A-Z0-9]', '', mrz_line2[:9])
         if len(potential_ppt) >= 7:
@@ -187,7 +184,6 @@ with col2:
 
 st.markdown("---")
 
-# Yahan Airline Code aur Passenger Number set karne ka option de diya
 setting_col1, setting_col2 = st.columns(2)
 with setting_col1:
     airline_code = st.text_input("✈️ Airline Code (e.g. sv, pk, qr):", value="sv", max_chars=2)
@@ -218,7 +214,6 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                 cnic = extracted.get('CNIC', '')
                 father_name = extracted.get('Father Name', '')
                 gender = extracted.get('Gender', 'M')
-                nat = "PAK" # Default to PAK
                 
                 if not given_name: given_name = "Unknown"
                 if not sur_name: sur_name = "Name"
@@ -266,13 +261,8 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                     st.markdown("---")
                     st.write("✈️ **Amadeus SR DOCS Command:**")
                     
-                    # Exact format match based on user's request
-                    # Example: SRDOCS sv HK1-P-pak-ad0983823-pak-01jan73-M-19sep25-marjan-gul-h/p1
-                    # Note: We replace spaces in names with hyphens if needed, or keep as is. Usually Amadeus uses '-' or spaces.
-                    surname_cmd = sur_name.replace(" ", "")
-                    givenname_cmd = given_name.replace(" ", "")
-                    
-                    sr_docs_cmd = f"SRDOCS {airline_code.lower()} HK1-P-pak-{ppt_num.lower()}-pak-{dob.lower()}-{gender}-{expiry.lower()}-{surname_cmd.lower()}-{givenname_cmd.lower()}-h/p{pax_no}"
+                    # BUG FIX: Yahan naam ke darmiyan spaces ab barkaraar rahenge
+                    sr_docs_cmd = f"SRDOCS {airline_code.lower()} HK1-P-pak-{ppt_num.lower()}-pak-{dob.lower()}-{gender}-{expiry.lower()}-{sur_name.lower()}-{given_name.lower()}-h/p{pax_no}"
                     
                     st.code(sr_docs_cmd, language="text")
                     
