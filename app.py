@@ -3,12 +3,11 @@ import os
 import re
 from PIL import Image, ImageEnhance, ImageOps
 import io
-import sys # <-- Naya import yahan add ho gaya hai
+import sys
 
 # --- LIBRARIES FOR OCR ---
 try:
     import pytesseract
-    # Agar Windows par chal raha hai toh path do, warna cloud par default path chalega
     if sys.platform.startswith('win'):
         pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
     OCR_AVAILABLE = True
@@ -82,7 +81,7 @@ def parse_passport_mrz(text):
                 
     return details
 
-# --- NEW HELPER: PROCESS PHOTO SIZE & FORMAT ---
+# --- HELPER: PROCESS PHOTO SIZE & FORMAT ---
 def format_photo_for_requirements(uploaded_photo):
     img = Image.open(uploaded_photo)
     
@@ -162,17 +161,17 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                 file_name = f"{clean_name}_{ppt_num}.jpg"
                 save_path = os.path.join(SAVE_DIR, file_name)
                 
-                # 2. Process the User Photo to required constraints
+                # 2. Process Photo
                 final_photo_bytes = format_photo_for_requirements(person_photo)
                 file_size_kb = len(final_photo_bytes) / 1024
                 
-                # 3. Save it to folder
+                # 3. Save Photo
                 with open(save_path, "wb") as f:
                     f.write(final_photo_bytes)
                     
                 st.success(f"✅ Photo Successfully Saved as: **{file_name}**")
                 
-                # 4. Display Results
+                # 4. Display Results with Copy Feature
                 res1, res2 = st.columns([1, 2])
                 with res1:
                     st.image(final_photo_bytes, caption=f"Size: {file_size_kb:.1f} KB\nDim: 120x150 px", width=150)
@@ -181,6 +180,13 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                     st.write(f"- **Given Name:** {given_name}") 
                     st.write(f"- **Surname:** {sur_name}")
                     st.write(f"- **Passport No:** {ppt_num}")
+                    
+                    st.markdown("---")
+                    st.write("📝 **Copy Data for Amadeus (Click icon on right):**")
+                    
+                    # Copy-able blocks
+                    st.code(f"{sur_name} {given_name}", language="text")
+                    st.code(f"{ppt_num}", language="text")
                     
                     st.markdown("---")
                     st.download_button(
