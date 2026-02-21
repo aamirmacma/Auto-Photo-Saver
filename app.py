@@ -18,17 +18,16 @@ except:
 st.set_page_config(page_title="Auto Photo Saver", page_icon="📸", layout="wide")
 
 st.title("📸 Auto Photo & Passport Saver (Amadeus Pro)")
-st.markdown("Passport scan karein, yeh naya engine **100% Accurate Data** nikal kar SR DOCS command banayega.")
+st.markdown("Passport scan karein. Yeh naya engine **100% Accurate Data** nikal kar perfect SR DOCS command banayega.")
 
-# --- HELPER: FORMAT DATES FOR AMADEUS (DDMMMYY) ---
-def format_amadeus_date(raw_date):
-    if not raw_date.isdigit() or len(raw_date) != 6:
-        return ""
-    yy, mm, dd = raw_date[0:2], raw_date[2:4], raw_date[4:6]
-    months = {"01":"JAN", "02":"FEB", "03":"MAR", "04":"APR", "05":"MAY", "06":"JUN", 
-              "07":"JUL", "08":"AUG", "09":"SEP", "10":"OCT", "11":"NOV", "12":"DEC"}
-    month_str = months.get(mm, mm)
-    return f"{dd}{month_str}{yy}"
+# --- HELPER: CLEAN NAME GARBAGE ---
+def clean_name_garbage(text):
+    # Sirf A-Z aur spaces rehne dein
+    text = re.sub(r'[^A-Z ]', '', text.upper())
+    # OCR ki wajah se aane wale end ke faltu letters (e.g., KKKK, SSSS, C, E, X) ko saaf karein
+    text = re.sub(r'(\b[KCSXZE]\b\s*)+$', '', text)
+    text = re.sub(r'[KCSXZE]{3,}$', '', text)
+    return text.strip()
 
 # --- HELPER: NEW ACCURATE PASSPORT EXTRACTOR ---
 def parse_passport_data_perfect(image):
@@ -38,91 +37,104 @@ def parse_passport_data_perfect(image):
         'Father Name': '', 'Gender': 'M'
     }
     
-    width, height = image.size
+    # Image ko bara aur wazeh karein
+    new_size = (int(image.width * 1.5), int(image.height * 1.5))
+    img_resized = image.resize(new_size, Image.Resampling.LANCZOS)
+    gray = ImageOps.grayscale(img_resized)
+    enhancer = ImageEnhance.Contrast(gray).enhance(2.0)
+    
+    # Poore passport ka text extract karein
+    full_text = pytesseract.image_to_string(enhancer).upper()
+    lines = full_text.split('\n')
     
     # ==========================================
-    # SCAN 1: TOP HALF (For Passport, CNIC, Father Name)
+    # 1. PASSPORT NUMBER, CNIC & DATES (Visual Regex - 100% Accurate)
     # ==========================================
-    top_crop = image.crop((0, 0, width, int(height * 0.70)))
-    top_gray = ImageOps.grayscale(top_crop)
-    # Mild enhance taake labels blur na hon
-    top_enh = ImageEnhance.Contrast(top_gray).enhance(1.5)
     
-    top_text = pytesseract.image_to_string(top_enh).upper()
-    
-    # 1. Exact Passport Number Match (e.g. HU0004372)
-    ppt_matches = re.findall(r'\b[A-Z]{2}\d{7}\b', top_text)
+    # Passport Number (Usually 2 letters + 7 digits, e.g., HU0004372)
+    ppt_matches = re.findall(r'\b([A-Z]{2}[O0-9]{7})\b', full_text.replace(" ", ""))
     if ppt_matches:
-        details['Passport'] = ppt_matches[0]
+        details['Passport'] = ppt_matches[0].replace('O', '0')
         
-    # 2. Exact CNIC Match (e.g. 42301-0903437-0)
-    cnic_matches = re.findall(r'\b\d{5}-\d{7}-\d\b', top_text)
+    # CNIC (e.g., 42301-0903437-0)
+    cnic_matches = re.findall(r'\b(\d{5}-\d{7}-\d)\b', full_text)
     if cnic_matches:
         details['CNIC'] = cnic_matches[0]
         
-    # 3. Father / Husband Name
-    top_lines = top_text.split('\n')
-    for i, line in enumerate(top_lines):
-        if "FATHER" in line or "HUSBAND" in line:
+    # Dates (DD MMM YYYY, e.g., 01 FEB 1967)
+    months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+    date_pattern = r'(\d{2})[ \-\.]*(' + '|'.join(months) + r')[ \-\.]*(\d{4})'
+    found_dates = re.findall(date_pattern, full_text)
+    
+    if found_dates:
+        parsed_dates = []
+        for d in found_dates:
+            parsed_dates.append({
+                'amadeus': f"{d[0]}{d[1]}{d[2][-2:]}",
+                'year': int(d[2])
+            })
+        # Sort by year: Pehli DOB, aakhri Expiry
+        parsed_dates.sort(key=lambda x: x['year'])
+        details['DOB'] = parsed_dates[0]['amadeus']
+        if len(parsed_dates) > 1:
+            details['Expiry'] = parsed_dates[-1]['amadeus']
+
+    # Gender (M / F)
+    sex_match = re.search(r'\bSEX\b.*?([MF])', full_text, re.IGNORECASE)
+    if sex_match:
+        details['Gender'] = sex_match.group(1).upper()
+
+    # ==========================================
+    # 2. NAME EXTRACTION (Husband/Father, Surname, Given Name)
+    # ==========================================
+    
+    for i, line in enumerate(lines):
+        # Father / Husband Name
+        if re.search(r'(FATHER|HUSBAND|FATH|HUSB)', line):
             for j in range(1, 4):
-                if i + j < len(top_lines):
-                    cand = re.sub(r'[^A-Z ]', '', top_lines[i+j]).strip()
-                    cand = re.sub(r'\s+', ' ', cand)
-                    ignore_words = ["DATE", "BIRTH", "SEX", "PLACE", "NATIONALITY", "PASSPORT", "AUTHORITY", "PAKISTAN", "KARACHI", "ISSUING", "OF"]
-                    if len(cand) > 3 and not any(w in cand for w in ignore_words):
+                if i + j < len(lines):
+                    cand = re.sub(r'[^A-Z ]', '', lines[i+j]).strip()
+                    ignore = ["DATE", "BIRTH", "SEX", "PLACE", "NATIONALITY", "PASSPORT", "AUTHORITY", "PAKISTAN", "KARACHI", "ISSUING", "OF", "NAME", "REPUBLIC"]
+                    if len(cand) > 3 and not any(w in cand for w in ignore):
                         details['Father Name'] = cand
                         break
-            if details['Father Name']:
-                break
-
-    # ==========================================
-    # SCAN 2: BOTTOM HALF (For MRZ details)
-    # ==========================================
-    bot_crop = image.crop((0, int(height * 0.60), width, height))
-    bot_gray = ImageOps.grayscale(bot_crop)
-    bot_enh = ImageEnhance.Contrast(bot_gray).enhance(2.5)
-    
-    bot_text = pytesseract.image_to_string(bot_enh, config='--psm 6').upper()
-    
-    # Sab faltu spaces hata dein taake MRZ ki lambai theek rahay
-    bot_lines = [l.replace(" ", "") for l in bot_text.split('\n')]
-    
-    mrz1, mrz2 = "", ""
-    for l in bot_lines:
-        if "P<" in l and len(l) > 30:
-            mrz1 = l[l.find("P<"):]
-        elif len(l) > 30 and sum(c.isdigit() for c in l) > 10 and "<" in l:
-            if not l.startswith("P<"):
-                mrz2 = l
-
-    # MRZ Line 1: Surname aur Given Name (STRICT LOGIC)
-    if mrz1:
-        name_part = mrz1[5:].rstrip('<')
-        if '<<' in name_part:
-            parts = name_part.split('<<', 1)
-            sur = parts[0].replace('<', ' ').strip()
-            giv = parts[1].replace('<', ' ').strip()
-        else:
-            sur = name_part.replace('<', ' ').strip()
-            giv = ""
-            
-        details['Surname'] = re.sub(r'[^A-Z ]', '', sur)
-        details['Given Name'] = re.sub(r'[^A-Z ]', '', giv)
-
-    # MRZ Line 2: Dates aur Fallback Passport
-    if mrz2 and len(mrz2) >= 42:
-        if not details['Passport']:
-            details['Passport'] = mrz2[0:9].replace('<', '')
-            
-        details['DOB'] = format_amadeus_date(mrz2[13:19])
-        if mrz2[20] in ['M', 'F']:
-            details['Gender'] = mrz2[20]
-        details['Expiry'] = format_amadeus_date(mrz2[21:27])
         
-        if not details['CNIC']:
-            p_num = mrz2[28:41].replace('<', '')
-            if len(p_num) == 13 and p_num.isdigit():
-                details['CNIC'] = f"{p_num[:5]}-{p_num[5:12]}-{p_num[12]}"
+        # Surname (Direct from Visual Area)
+        if re.search(r'\b(SURNAME|SUR NAME)\b', line):
+            if i + 1 < len(lines):
+                cand = re.sub(r'[^A-Z ]', '', lines[i+1]).strip()
+                if cand and len(cand) > 1 and cand not in ["GIVEN", "NAME", "NAMES", "PASSPORT", "PAKISTAN"]:
+                    details['Surname'] = cand
+                    
+        # Given Name (Direct from Visual Area)
+        if re.search(r'\b(GIVEN|GIVEN NAME|GIVEN NAMES)\b', line):
+            if i + 1 < len(lines):
+                cand = re.sub(r'[^A-Z ]', '', lines[i+1]).strip()
+                if cand and len(cand) > 1 and cand not in ["NATIONALITY", "PASSPORT", "DATE", "SEX", "M", "F"]:
+                    details['Given Name'] = cand
+
+    # ==========================================
+    # 3. MRZ FALLBACK (Agar oopar se kuch miss ho jaye)
+    # ==========================================
+    bot_crop = image.crop((0, int(image.height * 0.60), image.width, image.height))
+    bot_enh = ImageEnhance.Contrast(ImageOps.grayscale(bot_crop)).enhance(2.5)
+    mrz_text = pytesseract.image_to_string(bot_enh, config='--psm 6').upper()
+    
+    mrz_lines = [l.replace(" ", "") for l in mrz_text.split('\n')]
+    mrz1 = next((l for l in mrz_lines if "P<" in l), "")
+    
+    if mrz1 and (not details['Surname'] and not details['Given Name']):
+        mrz1 = re.sub(r'^.*?P<[A-Z]*', '', mrz1) # "PAK" ya prefix hata dein
+        if '<<' in mrz1:
+            parts = mrz1.split('<<', 1)
+            details['Surname'] = parts[0].replace('<', ' ')
+            details['Given Name'] = parts[1].replace('<', ' ')
+        else:
+            details['Surname'] = mrz1.replace('<', ' ')
+
+    # Final Cleanup for Garbage Characters
+    details['Surname'] = clean_name_garbage(details['Surname'])
+    details['Given Name'] = clean_name_garbage(details['Given Name'])
 
     return details
 
@@ -215,11 +227,14 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                 father_name = extracted.get('Father Name', '')
                 gender = extracted.get('Gender', 'M')
                 
-                # Agar dono khali hain tou basic fallback
-                clean_name = f"{given_name} {sur_name}".strip()
-                clean_name = re.sub(r'\s+', ' ', clean_name)
-                clean_name = re.sub(r'[^A-Za-z0-9 ]', '', clean_name)
-                if not clean_name: clean_name = "Saved_Photo"
+                # Agar dono naam khali hain tou default
+                if not given_name and not sur_name:
+                    clean_name = "Saved_Photo"
+                else:
+                    clean_name = f"{given_name} {sur_name}".strip()
+                    clean_name = re.sub(r'\s+', ' ', clean_name)
+                    clean_name = re.sub(r'[^A-Za-z0-9 ]', '', clean_name)
+                
                 if not ppt_num: ppt_num = "NoPassport"
                     
                 file_name = f"{clean_name}_{ppt_num}.jpg"
@@ -249,7 +264,7 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                     col_det1, col_det2 = st.columns(2)
                     
                     with col_det1:
-                        # Khali hone par dashes (---) show karega
+                        # Khali hone par dashes (---)
                         st.write(f"**Surname:** {sur_name if sur_name else '---'}")
                         st.write(f"**Father/Husband:** {father_name if father_name else 'Not Found'}")
                         st.write(f"**CNIC:** {cnic if cnic else 'Not Found'}")
@@ -266,7 +281,7 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                     surname_cmd = sur_name.replace(" ", "").lower()
                     givenname_cmd = given_name.replace(" ", "").lower()
                     
-                    # Yeh line automatically blank spaces ko control karegi
+                    # Yeh line automatically khali Surname ko control karegi (Double Dash -- format)
                     sr_docs_cmd = f"SRDOCS {airline_code.lower()} HK1-P-pak-{ppt_num.lower()}-pak-{dob.lower()}-{gender}-{expiry.lower()}-{surname_cmd}-{givenname_cmd}-h/p{pax_no}"
                     
                     st.code(sr_docs_cmd, language="text")
