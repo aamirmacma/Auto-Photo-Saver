@@ -20,24 +20,30 @@ st.set_page_config(page_title="Auto Photo Saver", page_icon="📸", layout="cent
 st.title("📸 Auto Photo & Passport Saver")
 st.markdown("Passport scan karein, system naam nikal kar photo ko enhance karega aur (5-12KB) mein save karega.")
 
-# --- HELPER: PASSPORT OCR PREPROCESSING (UPDATED) ---
+# --- HELPER: PASSPORT OCR PREPROCESSING ---
 def preprocess_image_for_ocr(image):
-    # 1. Image ko 1.5x bara karein taake OCR text ko theek se parh sake
     new_size = (int(image.width * 1.5), int(image.height * 1.5))
     img = image.resize(new_size, Image.Resampling.LANCZOS)
     
-    # 2. Grayscale aur Contrast (Sharpness hata di taake '<' theek rahay)
     gray_image = ImageOps.grayscale(img)
     enhancer = ImageEnhance.Contrast(gray_image)
     high_contrast = enhancer.enhance(2.0) 
     return high_contrast
+
+# --- HELPER: CLEAN GARBAGE OCR NOISE ---
+def clean_garbage(text):
+    # Naam ke aakhir mein aane walay faltu K aur C ko hatayen (e.g. " K K KKKK")
+    text = re.sub(r'(\s+[KC]+)+$', '', text)
+    # Agar aakhri lafz ke sath ghalti se C jur gaya ho (jaise RAHIMC)
+    if text.endswith('C') and len(text) > 3:
+        text = text[:-1]
+    return text.strip()
 
 # --- HELPER: SMARTER PASSPORT EXTRACTOR ---
 def parse_passport_mrz(text):
     details = {'Given Name': '', 'Surname': '', 'Passport': ''}
     
     clean_text = text.replace(" ", "").upper()
-    # BUG FIX: Yahan se 'K' nikal diya gaya hai taake naamon ke spellings kharab na hon
     for char in ['«', '¢', '(', '[', '{', '£', '€']:
         clean_text = clean_text.replace(char, "<")
     
@@ -60,15 +66,24 @@ def parse_passport_mrz(text):
                 surname = name_parts[0].replace('<', ' ').strip()
                 given_name = name_parts[1].replace('<', ' ').strip()
                 
-                details['Surname'] = re.sub(r'[^A-Z ]', '', surname)
-                details['Given Name'] = re.sub(r'[^A-Z ]', '', given_name)
+                # Naye cleaner function se naam saaf karein
+                details['Surname'] = clean_garbage(re.sub(r'[^A-Z ]', '', surname))
+                details['Given Name'] = clean_garbage(re.sub(r'[^A-Z ]', '', given_name))
             else:
                 parts = raw_name_data.split('<')
-                valid_parts = [re.sub(r'[^A-Z]', '', p) for p in parts if p]
+                valid_parts = []
+                for p in parts:
+                    cleaned_part = re.sub(r'[^A-Z]', '', p.strip())
+                    if not cleaned_part: continue
+                    # Agar OCR noise ka block aa jaye toh aage parhna chor dein
+                    if re.match(r'^[KC]{2,}$', cleaned_part):
+                        break
+                    valid_parts.append(cleaned_part)
+                
                 if valid_parts:
-                    details['Surname'] = valid_parts[0]
+                    details['Surname'] = clean_garbage(valid_parts[0])
                     if len(valid_parts) > 1:
-                        details['Given Name'] = " ".join(valid_parts[1:])
+                        details['Given Name'] = clean_garbage(" ".join(valid_parts[1:]))
         except Exception as e:
             pass
 
@@ -161,7 +176,6 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                 image = Image.open(passport_file)
                 processed_image = preprocess_image_for_ocr(image)
                 
-                # BUG FIX: --psm 6 add kiya taake tesseract lines ko theek se parhe
                 text = pytesseract.image_to_string(processed_image, config='--psm 6')
                 extracted = parse_passport_mrz(text)
                 
