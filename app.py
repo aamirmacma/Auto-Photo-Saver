@@ -20,21 +20,25 @@ st.set_page_config(page_title="Auto Photo Saver", page_icon="📸", layout="cent
 st.title("📸 Auto Photo & Passport Saver")
 st.markdown("Passport scan karein, system naam nikal kar photo ko enhance karega aur (5-12KB) mein save karega.")
 
-# --- HELPER: PASSPORT OCR PREPROCESSING ---
+# --- HELPER: PASSPORT OCR PREPROCESSING (UPDATED) ---
 def preprocess_image_for_ocr(image):
-    gray_image = ImageOps.grayscale(image)
+    # 1. Image ko 1.5x bara karein taake OCR text ko theek se parh sake
+    new_size = (int(image.width * 1.5), int(image.height * 1.5))
+    img = image.resize(new_size, Image.Resampling.LANCZOS)
+    
+    # 2. Grayscale aur Contrast (Sharpness hata di taake '<' theek rahay)
+    gray_image = ImageOps.grayscale(img)
     enhancer = ImageEnhance.Contrast(gray_image)
-    high_contrast = enhancer.enhance(2.5) 
-    sharpener = ImageEnhance.Sharpness(high_contrast)
-    sharp_image = sharpener.enhance(2.0)
-    return sharp_image
+    high_contrast = enhancer.enhance(2.0) 
+    return high_contrast
 
 # --- HELPER: SMARTER PASSPORT EXTRACTOR ---
 def parse_passport_mrz(text):
     details = {'Given Name': '', 'Surname': '', 'Passport': ''}
     
     clean_text = text.replace(" ", "").upper()
-    for char in ['«', '¢', '(', '[', '{', 'K', '£', '€']:
+    # BUG FIX: Yahan se 'K' nikal diya gaya hai taake naamon ke spellings kharab na hon
+    for char in ['«', '¢', '(', '[', '{', '£', '€']:
         clean_text = clean_text.replace(char, "<")
     
     lines = clean_text.split('\n')
@@ -55,6 +59,7 @@ def parse_passport_mrz(text):
                 name_parts = raw_name_data.split('<<', 1)
                 surname = name_parts[0].replace('<', ' ').strip()
                 given_name = name_parts[1].replace('<', ' ').strip()
+                
                 details['Surname'] = re.sub(r'[^A-Z ]', '', surname)
                 details['Given Name'] = re.sub(r'[^A-Z ]', '', given_name)
             else:
@@ -83,34 +88,23 @@ def parse_passport_mrz(text):
 
 # --- NEW HELPER: AUTO-ENHANCE PERSON'S PHOTO ---
 def auto_enhance_face_photo(img):
-    # 1. Color Balance (Thoda natural aur bright color)
     color_enhancer = ImageEnhance.Color(img)
     img = color_enhancer.enhance(1.1)
-    
-    # 2. Brightness (Halki si roshni barhana)
     brightness_enhancer = ImageEnhance.Brightness(img)
     img = brightness_enhancer.enhance(1.05)
-    
-    # 3. Contrast (Features ko wazeh karna)
     contrast_enhancer = ImageEnhance.Contrast(img)
     img = contrast_enhancer.enhance(1.1)
-    
-    # 4. Sharpness (Blurry pictures ko clear karna)
     sharpness_enhancer = ImageEnhance.Sharpness(img)
-    img = sharpness_enhancer.enhance(1.5) # 1.5x sharper
-    
+    img = sharpness_enhancer.enhance(1.5) 
     return img
 
 # --- HELPER: PROCESS PHOTO SIZE & FORMAT ---
 def format_photo_for_requirements(uploaded_photo):
     img = Image.open(uploaded_photo)
-    
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
         
-    # Yahan Auto-Enhance function call ho raha hai!
     img = auto_enhance_face_photo(img)
-        
     img = img.resize((120, 150), Image.Resampling.LANCZOS)
     
     quality = 95
@@ -166,7 +160,9 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                 # 1. OCR Data Extraction
                 image = Image.open(passport_file)
                 processed_image = preprocess_image_for_ocr(image)
-                text = pytesseract.image_to_string(processed_image)
+                
+                # BUG FIX: --psm 6 add kiya taake tesseract lines ko theek se parhe
+                text = pytesseract.image_to_string(processed_image, config='--psm 6')
                 extracted = parse_passport_mrz(text)
                 
                 given_name = extracted.get('Given Name', '').strip()
