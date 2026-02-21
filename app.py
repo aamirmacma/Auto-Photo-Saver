@@ -18,7 +18,7 @@ except:
 st.set_page_config(page_title="Auto Photo Saver", page_icon="📸", layout="centered")
 
 st.title("📸 Auto Photo & Passport Saver")
-st.markdown("Passport scan karein, system naam nikal kar photo ko enhance karega aur (5-12KB) mein save karega.")
+st.markdown("Passport scan karein, system Amadeus ke liye mukammal details nikal kar photo enhance karega.")
 
 # --- HELPER: PASSPORT OCR PREPROCESSING ---
 def preprocess_image_for_ocr(image):
@@ -32,16 +32,24 @@ def preprocess_image_for_ocr(image):
 
 # --- HELPER: CLEAN GARBAGE OCR NOISE ---
 def clean_garbage(text):
-    # Naam ke aakhir mein aane walay faltu K aur C ko hatayen (e.g. " K K KKKK")
     text = re.sub(r'(\s+[KC]+)+$', '', text)
-    # Agar aakhri lafz ke sath ghalti se C jur gaya ho (jaise RAHIMC)
     if text.endswith('C') and len(text) > 3:
         text = text[:-1]
     return text.strip()
 
+# --- HELPER: FORMAT DATES FOR AMADEUS (DDMMMYY) ---
+def format_amadeus_date(raw_date):
+    if not raw_date.isdigit() or len(raw_date) != 6:
+        return ""
+    yy, mm, dd = raw_date[0:2], raw_date[2:4], raw_date[4:6]
+    months = {"01":"JAN", "02":"FEB", "03":"MAR", "04":"APR", "05":"MAY", "06":"JUN", 
+              "07":"JUL", "08":"AUG", "09":"SEP", "10":"OCT", "11":"NOV", "12":"DEC"}
+    month_str = months.get(mm, mm)
+    return f"{dd}{month_str}{yy}"
+
 # --- HELPER: SMARTER PASSPORT EXTRACTOR ---
 def parse_passport_mrz(text):
-    details = {'Given Name': '', 'Surname': '', 'Passport': ''}
+    details = {'Given Name': '', 'Surname': '', 'Passport': '', 'DOB': '', 'Expiry': ''}
     
     clean_text = text.replace(" ", "").upper()
     for char in ['«', '¢', '(', '[', '{', '£', '€']:
@@ -58,6 +66,7 @@ def parse_passport_mrz(text):
                 mrz_line2 = lines[i+1]
             break
             
+    # --- Line 1: Naam Nikalna ---
     if mrz_line1:
         try:
             raw_name_data = mrz_line1[5:].strip('<')
@@ -66,7 +75,6 @@ def parse_passport_mrz(text):
                 surname = name_parts[0].replace('<', ' ').strip()
                 given_name = name_parts[1].replace('<', ' ').strip()
                 
-                # Naye cleaner function se naam saaf karein
                 details['Surname'] = clean_garbage(re.sub(r'[^A-Z ]', '', surname))
                 details['Given Name'] = clean_garbage(re.sub(r'[^A-Z ]', '', given_name))
             else:
@@ -75,7 +83,6 @@ def parse_passport_mrz(text):
                 for p in parts:
                     cleaned_part = re.sub(r'[^A-Z]', '', p.strip())
                     if not cleaned_part: continue
-                    # Agar OCR noise ka block aa jaye toh aage parhna chor dein
                     if re.match(r'^[KC]{2,}$', cleaned_part):
                         break
                     valid_parts.append(cleaned_part)
@@ -87,11 +94,23 @@ def parse_passport_mrz(text):
         except Exception as e:
             pass
 
-    if mrz_line2 and len(mrz_line2) >= 9:
+    # --- Line 2: Passport No, DOB, Expiry Nikalna ---
+    if mrz_line2 and len(mrz_line2) >= 28: # MRZ ki length check ki hai
+        
+        # 1. Passport Number
         potential_ppt = re.sub(r'[^A-Z0-9]', '', mrz_line2[:9])
         if len(potential_ppt) >= 7:
             details['Passport'] = potential_ppt
             
+        # 2. Date of Birth (Index 13 se 19 tak hoti hai)
+        dob_raw = mrz_line2[13:19]
+        details['DOB'] = format_amadeus_date(dob_raw)
+        
+        # 3. Expiry Date (Index 21 se 27 tak hoti hai)
+        exp_raw = mrz_line2[21:27]
+        details['Expiry'] = format_amadeus_date(exp_raw)
+
+    # Fallback Passport
     if not details['Passport']:
         matches = re.findall(r'\b[A-Z0-9]{8,10}\b', clean_text)
         for m in matches:
@@ -182,6 +201,8 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                 given_name = extracted.get('Given Name', '').strip()
                 sur_name = extracted.get('Surname', '').strip()
                 ppt_num = extracted.get('Passport', '').strip()
+                dob = extracted.get('DOB', 'Unknown')
+                expiry = extracted.get('Expiry', 'Unknown')
                 
                 if not given_name: given_name = "Unknown"
                 if not sur_name: sur_name = "Name"
@@ -216,13 +237,26 @@ if st.button("💾 PROCESS & SAVE PHOTO", type="primary", use_container_width=Tr
                     st.write(f"- **Given Name:** {given_name}") 
                     st.write(f"- **Surname:** {sur_name}")
                     st.write(f"- **Passport No:** {ppt_num}")
+                    st.write(f"- **DOB:** {dob}")
+                    st.write(f"- **Expiry Date:** {expiry}")
                     
                     st.markdown("---")
                     st.write("📝 **Copy Data for Amadeus:**")
                     
                     full_name_for_copy = f"{given_name} {sur_name}".strip()
                     st.code(full_name_for_copy, language="text")
-                    st.code(f"{ppt_num}", language="text")
+                    
+                    # Amadeus DOCS format mein Dates aur Passport alag copy blocks mein
+                    col_copy1, col_copy2, col_copy3 = st.columns(3)
+                    with col_copy1:
+                        st.write("Passport:")
+                        st.code(f"{ppt_num}", language="text")
+                    with col_copy2:
+                        st.write("DOB:")
+                        st.code(f"{dob}", language="text")
+                    with col_copy3:
+                        st.write("Expiry:")
+                        st.code(f"{expiry}", language="text")
                     
                     st.markdown("---")
                     st.download_button(
