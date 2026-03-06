@@ -173,23 +173,32 @@ def format_photo_for_requirements(uploaded_photo):
         elif size_kb > 12:
             quality -= 5
         else:
-            break 
+            break # Agar pehle hi 5 se choti ho jaye tou nikal aao
             
     return output_bytes.getvalue()
 
-# --- HELPER: PROCESS PASSPORT SIZE & FORMAT (420x300) ---
+# --- HELPER: PROCESS PASSPORT FOR PORTAL (1450x1010, Min 450KB) ---
 def format_passport_for_requirements(uploaded_passport):
     img = Image.open(uploaded_passport)
     if img.mode in ("RGBA", "P"):
         img = img.convert("RGB")
         
-    # Resize to standard optimal size for web uploads (420x300)
-    img = img.resize((420, 300), Image.Resampling.LANCZOS)
+    # Naya Exact Size Requirement: 1450 x 1010 px
+    img = img.resize((1450, 1010), Image.Resampling.LANCZOS)
     
-    quality = 90
     output_bytes = io.BytesIO()
-    img.save(output_bytes, format='JPEG', quality=quality)
+    # Save at 100% Full HD Quality first
+    img.save(output_bytes, format='JPEG', quality=100, subsampling=0)
     
+    # Minimum 450 KB requirement logic (Using Padding Trick if needed)
+    size_bytes = output_bytes.tell()
+    min_bytes = 450 * 1024
+    
+    if size_bytes < min_bytes:
+        # Agar image ka size 450kb se kam hai tou aakhir mein invisible data add kar dega
+        padding_size = min_bytes - size_bytes + 2048 # 2KB extra safety
+        output_bytes.write(b'\x00' * padding_size)
+        
     return output_bytes.getvalue()
 
 # --- FOLDER BANANE KA LOGIC ---
@@ -265,7 +274,6 @@ if st.button("💾 PROCESS ALL PASSENGERS", type="primary", use_container_width=
                             
                         file_name = f"{clean_name}_{ppt_num}.jpg".strip("_")
                         passport_file_name = f"Passport_{file_name}"
-                        save_path = os.path.join(SAVE_DIR, file_name)
                         
                         # 2. Process & Enhance Photo & Passport
                         final_photo_bytes = format_photo_for_requirements(p['photo'])
@@ -274,15 +282,16 @@ if st.button("💾 PROCESS ALL PASSENGERS", type="primary", use_container_width=
                         final_ppt_bytes = format_passport_for_requirements(p['passport'])
                         ppt_size_kb = len(final_ppt_bytes) / 1024
                         
+                        # Save main photo to disk
+                        save_path = os.path.join(SAVE_DIR, file_name)
                         with open(save_path, "wb") as f:
                             f.write(final_photo_bytes)
                             
-                        # 3. Display Results
+                        # 3. Display Results in 3 Columns
                         with st.expander(f"✅ Passenger {p['pax_no']}: {given_name} {sur_name}", expanded=True):
-                            # Layout set to match your mockup: [Photo(1)] [Details(2.2)] [Passport(1.5)]
                             res1, res2, res3 = st.columns([1, 2.2, 1.5])
                             
-                            # Left Column: Photo
+                            # COLUMN 1: PHOTO & DOWNLOAD
                             with res1:
                                 st.image(final_photo_bytes, caption=f"Size: {file_size_kb:.1f} KB\nDim: 120x150 px", width=150)
                                 st.download_button(
@@ -293,7 +302,7 @@ if st.button("💾 PROCESS ALL PASSENGERS", type="primary", use_container_width=
                                     key=f"dl_{p['pax_no']}"
                                 )
                                 
-                            # Middle Column: Data and Amadeus Command
+                            # COLUMN 2: DETAILS & AMADEUS COMMAND
                             with res2:
                                 col_det1, col_det2 = st.columns(2)
                                 
@@ -318,9 +327,9 @@ if st.button("💾 PROCESS ALL PASSENGERS", type="primary", use_container_width=
                                 
                                 st.code(sr_docs_cmd, language="text")
                             
-                            # Right Column: Passport Image
+                            # COLUMN 3: PASSPORT & DOWNLOAD (450KB+ Logic Applied)
                             with res3:
-                                st.image(final_ppt_bytes, caption=f"Size: {ppt_size_kb:.1f} KB\nDim: 420x300 px", use_container_width=True)
+                                st.image(final_ppt_bytes, caption=f"Size: {ppt_size_kb:.1f} KB\nDim: 1450x1010 px", use_container_width=True)
                                 st.download_button(
                                     label=f"⬇️ Download Passport",
                                     data=final_ppt_bytes,
